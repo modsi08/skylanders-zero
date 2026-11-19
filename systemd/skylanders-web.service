@@ -1,0 +1,16 @@
+[Unit]
+Description=Skylanders web interface and USB protocol handler
+After=network.target
+[Service]
+Type=simple
+WorkingDirectory=@@ROOT@@
+ExecStart=@@ROOT@@/.venv/bin/python @@ROOT@@/app.py
+Restart=always
+RestartSec=3
+User=root
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/etc/skylanders-zero.env
+TimeoutStopSec=15
+KillMode=control-group
+[Install]
+WantedBy=multi-user.target

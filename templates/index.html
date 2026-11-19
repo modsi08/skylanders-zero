@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Skylanders Portal</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,Arial}body{max-width:1100px;margin:25px auto;padding:0 15px;background:#0b1020;color:#f0f4ff}h1{margin-bottom:4px}small,.muted{color:#a6b3ce}.panel{background:#161e33;border:1px solid #34405c;border-radius:16px;padding:18px;margin-top:18px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.slot{background:#222d48;border-radius:12px;padding:14px;min-height:100px}.slot b{display:block;margin:8px 0;word-break:break-word}button{background:#4a79f4;color:white;border:0;border-radius:9px;padding:9px 13px;cursor:pointer;font-weight:600}button:disabled{opacity:.45;cursor:default}button.secondary{background:#35435f}button.danger{background:#854053}input,select{background:#283451;color:white;border:1px solid #526180;padding:9px;border-radius:8px;max-width:100%;box-sizing:border-box}table{width:100%;border-collapse:collapse}td{border-bottom:1px solid #35435f;padding:14px 6px;word-break:break-word}tr:last-child td{border:0}.actions,.filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.filters label{display:grid;gap:5px;font-size:.85rem}.filters input{min-width:220px}.badges{display:flex;gap:5px;flex-wrap:wrap;margin:7px 0}.badge{font-size:.8rem;border:1px solid #526180;border-radius:20px;padding:3px 8px;color:#dce7ff}.badge.giant{background:#38552e;border-color:#759b62}.warning{color:#ffc888;font-size:.85rem}.filename,.ids{font-size:.8rem;color:#a6b3ce;margin:5px 0}.filename{overflow-wrap:anywhere}.figure-name{font-size:1.05rem}#message{min-height:26px;color:#9de5b7}.status{font-weight:700}.details{margin:8px 0;font-size:.85rem}.details summary{cursor:pointer;color:#b9ccff}.file-actions{width:235px}@media(max-width:600px){td{display:block;border:0}.file-actions{width:auto;padding-top:0;border-bottom:1px solid #35435f}tr{display:block}input[type=file]{width:100%}}
+</style>
+</head>
+<body>
+<h1>Skylanders Portal</h1><small>Raspberry Pi • PS3 • v0.7.0 figure selection</small>
+<div class="panel">
+<div id="mode-controls"><h2>Device mode</h2><p><select id="mode" aria-label="Device mode"><option value="portal">Skylanders portal</option><option id="controller-option" value="controller">Bluetooth controller adapter</option><option value="idle">Idle (release USB)</option></select> <button id="apply-mode" onclick="changeMode()">Apply mode</button></p><p class="muted" id="mode-note"></p></div>
+<span class="status" id="usb">Checking USB…</span><div class="warning" id="err"></div><p id="message" role="status"></p><button class="secondary" onclick="action('save')">Save figure progress</button>
+</div>
+<div class="panel"><h2>My selection · 16 slots</h2><p class="muted">Add figures below, then activate one here. Only the active figure is placed on the virtual portal.</p><p><button id="deactivate" class="secondary" onclick="selectionAction('deactivate')">Deactivate current figure</button></p><div id="selection-error" class="warning"></div><div id="slots" class="grid"></div></div>
+<div class="panel">
+<h2>My Skylanders</h2>
+<p class="muted">Identify figures reads file headers once. Names, details and filters then run in your browser. Edition game is not a guarantee of compatibility.</p>
+<p><button id="identify" onclick="identifyFigures()">Identify figures</button> <span class="muted" id="identify-status">Your portal works without identifying the library.</span></p>
+<p class="actions"><input id="upload" aria-label="Upload figure files" type="file" accept=".bin,.dump,.dmp,.sky" multiple><button onclick="upload()">Upload files</button></p>
+<div class="filters">
+<label>Search<input id="search" placeholder="Name, filename or ID" type="search" oninput="renderFiles()"></label>
+<label>Element<select id="element" onchange="renderFiles()"><option value="">All elements</option></select></label>
+<label>Type<select id="type" onchange="renderFiles()"><option value="">All types</option></select></label>
+<label>Edition game<select id="game" onchange="renderFiles()"><option value="">All editions</option></select></label>
+<button class="secondary" onclick="giants()">Show Giants</button><button class="secondary" onclick="clearFilters()">Clear filters</button>
+</div>
+<p id="file-count" class="muted"></p><div style="overflow:auto"><table aria-label="Figure library"><tbody id="files"></tbody></table></div>
+</div>
+<script src="/catalogue.js"></script>
+<script>
+let filesSignature='',slotsSignature='',selectionBusy=false;
+let selection={slots:Array.from({length:16},(_,i)=>({slot:i+1,file:null}))};
+let clientCatalogue=null,identityCancelled=false;const identities=new Map();
+let modeInitialized=false,current={files:[],slots:[]};
+const token=new URLSearchParams(location.search).get('token')||'';
+const $=id=>document.getElementById(id);
+function element(tag,text,cls){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e;}
+async function api(url,data){const r=await fetch('/api/'+url,{method:'POST',headers:{'Content-Type':'application/json','X-Portal-Token':token},body:JSON.stringify(data||{})});const j=await r.json();if(!r.ok)throw Error(j.error||'Request failed');return j;}
+function msg(s,fail=false){$('message').textContent=s;$('message').style.color=fail?'#ff9bab':'#9de5b7';}
+function figureCard(f,filename){
+ const box=element('div');
+ if(!f){box.append(element('strong',filename||'Empty','figure-name'));return box;}
+ box.append(element('strong',f.name,'figure-name'));
+ if(filename)box.append(element('div',filename,'filename'));
+ const badges=element('div',undefined,'badges');
+ [f.element||'Element unknown',f.figure_type||'Type unknown'].forEach(t=>badges.append(element('span',t,'badge'+(t==='Giant'?' giant':''))));box.append(badges);
+ if(f.match!=='exact')box.append(element('div',f.known_character?'Unknown variant':'Unidentified figure','warning'));
+ const details=element('details',undefined,'details');details.append(element('summary','Figure details'));
+ details.append(element('div','Character ID: '+f.character_id+' · Variant ID: '+f.variant_id,'ids'));
+ details.append(element('div','Edition: '+(f.variant_name||'Unknown')));
+ details.append(element('div','Edition game: '+(f.edition_game||'Unknown')));
+ for(const note of [...(f.abilities||[]),...(f.notes||[])])details.append(element('p',note,f.notes?.includes(note)?'warning':''));
+ box.append(details);return box;
+}
+function options(id,values){const select=$(id),previous=select.value;const all=select.options[0].textContent;
+ const sorted=[...new Set(values.filter(Boolean))].sort();
+ if(previous&&!sorted.includes(previous))sorted.push(previous);
+ const nodes=[new Option(all,''),...sorted.map(v=>new Option(v,v))];select.replaceChildren(...nodes);select.value=previous;
+}
+function renderFiles(){
+ const query=$('search').value.toLowerCase().trim(),el=$('element').value,type=$('type').value,game=$('game').value;
+ const files=current.files.filter(file=>{const f=file.figure||{};return(!el||(f.element||'Unknown')===el)&&(!type||(f.figure_type||'Unknown')===type)&&(!game||(f.edition_game||'Unknown')===game)&&(!query||[file.name,f.name,f.character_name,f.variant_name,f.character_id,f.variant_id].join(' ').toLowerCase().includes(query));});
+ $('file-count').textContent=files.length+' of '+current.files.length+' files shown';
+ $('files').replaceChildren(...files.map(file=>{
+  const tr=element('tr'),td=element('td'),buttons=element('td',undefined,'file-actions'),actions=element('div',undefined,'actions');
+  td.append(figureCard(file.figure,file.name));
+  const added=selection.slots.some(s=>s.file===file.name);
+  const load=element('button',added?'Added':'Add to selection');load.disabled=selectionBusy||added;load.onclick=()=>selectionAction('add',{name:file.name});
+  const download=element('button','Download','secondary');download.onclick=()=>location.href='/api/download/'+encodeURIComponent(file.name);
+  const del=element('button','Delete','danger');del.onclick=()=>{if(confirm('Delete '+file.name+'?'))action('delete',{name:file.name});};
+  actions.append(load,download,del);buttons.append(actions);tr.append(td,buttons);return tr;
+ }));
+ if(!files.length){const tr=element('tr'),td=element('td',current.files.length?'No figures match these filters.':'Upload figure files to identify them.','muted');td.colSpan=2;tr.append(td);$('files').append(tr);}
+}
+function giants(){clearFilters();$('type').value='Giant';renderFiles();}
+function clearFilters(){for(const id of ['search','element','type','game'])$(id).value='';renderFiles();}
+async function refresh(){try{
+ const r=await fetch('/api/state');if(!r.ok)throw Error('Unable to read portal status');current=await r.json();applyMetadata();
+ const hasModes=current.mode!==undefined;$('mode-controls').hidden=!hasModes;
+ if(hasModes){if(!modeInitialized){$('mode').value=current.mode;modeInitialized=true;}$('controller-option').disabled=!current.controller_available;$('mode-note').textContent='Current mode: '+current.mode+'. '+(current.controller_note||'');}
+ $('usb').textContent=hasModes&&current.mode!=='portal'?'Portal USB inactive':current.usb_connected?'● USB configured by host':'○ Waiting for USB configuration';
+ $('usb').style.color=current.usb_connected?'#9de5b7':'#ffc888';$('err').textContent=current.mode_error||((!hasModes||current.mode==='portal')?current.usb_error:'')||'';
+ renderSelection();
+ const nextFiles=JSON.stringify([current.files,current.mode,selection.slots,selectionBusy]);if(nextFiles!==filesSignature){filesSignature=nextFiles;
+ options('element',current.files.map(f=>f.figure?.element||'Unknown'));
+ options('type',['Giant','Regular','Trap Master','SWAP Force','SuperCharger','Sensei','Mini','Sidekick','Vehicle','Trap','Creation Crystal',...current.files.map(f=>f.figure?.figure_type||'Unknown')]);
+ options('game',current.files.map(f=>f.figure?.edition_game||'Unknown'));renderFiles();}
+
+ }catch(e){msg(e.message,true);}}
+function renderSelection(){
+ const signature=JSON.stringify([selection,current.slots,current.mode,selectionBusy,clientCatalogue?Array.from(identities):null]);
+ if(signature===slotsSignature)return;slotsSignature=signature;
+ $('selection-error').textContent=selection.selection_error||'';
+ $('deactivate').disabled=selectionBusy||!current.slots.some(s=>s.file);
+ $('slots').replaceChildren(...selection.slots.map(choice=>{
+  const actual=current.slots.find(s=>s.file&&s.file===choice.file);
+  const exists=!choice.file||current.files.some(f=>f.name===choice.file);
+  const d=element('div',undefined,'slot');if(actual)d.style.border='2px solid #81c89b';
+  const status=actual?(actual.state===2?'Removing':actual.state===3?'Activating':'Active'):'Not active';
+  d.append(element('span','Slot '+choice.slot+(choice.file?' · '+status:'')));
+  const figure=clientCatalogue&&choice.file&&identities.has(choice.file)?clientCatalogue.lookup(identities.get(choice.file)):null;
+  d.append(figureCard(figure,choice.file));
+  if(choice.file){
+   const buttons=element('div',undefined,'actions');
+   const activate=element('button',actual&&actual.state!==2?'Active':'Activate');
+   activate.disabled=selectionBusy||!exists||!!actual||(current.mode!==undefined&&current.mode!=='portal');
+   activate.onclick=()=>selectionAction('activate',{slot:choice.slot});
+   const remove=element('button','Remove','secondary');remove.disabled=selectionBusy;remove.onclick=()=>selectionAction('remove',{slot:choice.slot});
+   buttons.append(activate,remove);d.append(buttons);if(!exists)d.append(element('p','File missing from library','warning'));
+  }
+  return d;
+ }));
+}
+async function refreshSelection(){
+ const r=await fetch('/api/selection');if(!r.ok)throw Error('Unable to read saved selection');selection=await r.json();renderSelection();renderFiles();
+}
+async function selectionAction(operation,data){
+ if(selectionBusy)return;
+ if(operation==='activate')identityCancelled=true;
+ selectionBusy=true;renderSelection();renderFiles();
+ try{
+  const result=await api('selection/'+operation,data);selection=result;
+  msg(operation==='add'?'Added to slot '+result.slot+' · not active yet':operation==='activate'?'Figure activated':operation==='remove'?'Removed from selection':'Figure deactivated');
+ }catch(e){msg(e.message,true);}
+ finally{selectionBusy=false;filesSignature='';slotsSignature='';await refresh();}
+}
+async function ensureCatalogue(){
+ if(clientCatalogue)return;
+ const r=await fetch('/api/catalogue');if(!r.ok)throw Error('Unable to load catalogue');
+ clientCatalogue=new FigureCatalogue(await r.json());
+}
+function applyMetadata(){
+ if(!clientCatalogue)return;
+ for(const f of current.files)f.figure=identities.has(f.name)?clientCatalogue.lookup(identities.get(f.name)):null;
+ for(const s of current.slots)s.figure=s.file&&identities.has(s.file)?clientCatalogue.lookup(identities.get(s.file)):null;
+}
+async function identifyFigures(){
+ const button=$('identify');button.disabled=true;identityCancelled=false;
+ try{
+  await ensureCatalogue();const names=current.files.map(f=>f.name);let count=0;
+  for(let offset=0;offset<names.length&&!identityCancelled;offset+=16){
+   const batch=names.slice(offset,offset+16);const response=await api('identities',{names:batch});
+   for(const [name,identity] of Object.entries(response.identities))identities.set(name,identity);
+   count+=batch.length;$('identify-status').textContent='Read '+count+' of '+names.length+' headers';
+   // Yield between batches and allow Load to cancel any remaining library work.
+   await new Promise(resolve=>setTimeout(resolve,100));
+  }
+  $('identify-status').textContent=identityCancelled?'Identification paused to load your figure.':'Identified '+count+' files. Lookups now run in your browser.';
+  filesSignature='';slotsSignature='';await refresh();
+ }catch(e){msg(e.message,true);}finally{button.disabled=false;}
+}
+async function action(name,data){
+ if(name==='load')identityCancelled=true;
+ try{await api(name,data);if(name==='delete')identities.delete(data.name);msg('Done: '+name);await refresh();}catch(e){msg(e.message,true);}
+}
+async function changeMode(){const b=$('apply-mode');b.disabled=true;try{await action('mode',{mode:$('mode').value});}finally{b.disabled=false;}}
+async function upload(){
+ for(const f of $('upload').files){
+  const fd=new FormData();fd.append('file',f);
+  try{
+   const r=await fetch('/api/upload',{method:'POST',headers:{'X-Portal-Token':token},body:fd});
+   const j=await r.json();if(!r.ok)throw Error(j.error);
+   try{await ensureCatalogue();identities.set(j.name,FigureCatalogue.header(await f.slice(0,32).arrayBuffer()));}
+   catch(e){msg('Uploaded '+j.name+'; identification unavailable: '+e.message,true);continue;}
+   msg('Uploaded '+f.name);
+  }catch(e){msg(f.name+': '+e.message,true);}
+ }
+ $('upload').value='';await refresh();
+}
+
+refresh();refreshSelection().catch(e=>msg(e.message,true));setInterval(refresh,2500);
+</script>
+</body></html>

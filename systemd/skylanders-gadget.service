@@ -1,0 +1,10 @@
+[Unit]
+Description=Skylanders Raw Gadget prerequisite check
+After=local-fs.target
+Before=skylanders-web.service
+[Service]
+Type=oneshot
+ExecStart=/bin/bash @@ROOT@@/setup-gadget.sh
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target
